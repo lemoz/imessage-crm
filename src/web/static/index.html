@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>iMessage CRM Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f7;
+            color: #1d1d1f;
+            line-height: 1.6;
+        }
+        
+        .header {
+            background: #007aff;
+            color: white;
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        .container {
+            display: grid;
+            grid-template-columns: 300px 1fr 400px;
+            height: calc(100vh - 80px);
+            gap: 1px;
+            background: #d1d1d6;
+        }
+        
+        .column {
+            background: white;
+            overflow-y: auto;
+        }
+        
+        .column-header {
+            background: #f9f9f9;
+            padding: 1rem;
+            border-bottom: 1px solid #e5e5e7;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .message-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 400;
+            font-size: 0.85rem;
+        }
+        
+        .limit-selector {
+            padding: 0.25rem 0.5rem;
+            border: 1px solid #d1d1d6;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            background: white;
+        }
+        
+        .conversation-list {
+            padding: 0;
+        }
+        
+        .conversation-item {
+            padding: 1rem;
+            border-bottom: 1px solid #f0f0f0;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .conversation-item:hover {
+            background: #f9f9f9;
+        }
+        
+        .conversation-item.active {
+            background: #007aff;
+            color: white;
+        }
+        
+        .conversation-item.insufficient-data {
+            opacity: 0.6;
+            background: #f9f9f9;
+        }
+        
+        .conversation-item.insufficient-data:hover {
+            background: #f0f0f0;
+        }
+        
+        .conversation-item.needs-testing {
+            border-left: 3px solid #ff9500;
+        }
+        
+        .conversation-name {
+            font-weight: 500;
+            margin-bottom: 0.25rem;
+        }
+        
+        .conversation-meta {
+            font-size: 0.85rem;
+            opacity: 0.7;
+        }
+        
+        .messages-container {
+            padding: 1rem;
+        }
+        
+        .message {
+            margin-bottom: 1rem;
+            max-width: 80%;
+        }
+        
+        .message.from-me {
+            margin-left: auto;
+            text-align: right;
+        }
+        
+        .message-bubble {
+            padding: 0.75rem 1rem;
+            border-radius: 18px;
+            display: inline-block;
+            max-width: 100%;
+            word-wrap: break-word;
+        }
+        
+        .message.from-me .message-bubble {
+            background: #007aff;
+            color: white;
+        }
+        
+        .message:not(.from-me) .message-bubble {
+            background: #e9e9eb;
+            color: #1d1d1f;
+        }
+        
+        .message-time {
+            font-size: 0.75rem;
+            opacity: 0.6;
+            margin-top: 0.25rem;
+        }
+
+        /* Attachment indicators */
+        .attachment-indicator {
+            display: inline-block;
+            padding: 0.3rem 0.6rem;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            background: rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            margin: 0.2rem 0;
+        }
+
+        .message.from-me .attachment-indicator {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: rgba(255, 255, 255, 0.3);
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .attachment-image {
+            background: rgba(76, 175, 80, 0.15);
+            border-color: rgba(76, 175, 80, 0.3);
+            color: #2e7d32;
+        }
+
+        .message.from-me .attachment-image {
+            background: rgba(129, 199, 132, 0.3);
+            border-color: rgba(129, 199, 132, 0.4);
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .attachment-video {
+            background: rgba(233, 30, 99, 0.15);
+            border-color: rgba(233, 30, 99, 0.3);
+            color: #c2185b;
+        }
+
+        .message.from-me .attachment-video {
+            background: rgba(240, 98, 146, 0.3);
+            border-color: rgba(240, 98, 146, 0.4);
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .attachment-audio {
+            background: rgba(255, 152, 0, 0.15);
+            border-color: rgba(255, 152, 0, 0.3);
+            color: #f57c00;
+        }
+
+        .message.from-me .attachment-audio {
+            background: rgba(255, 183, 77, 0.3);
+            border-color: rgba(255, 183, 77, 0.4);
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .attachment-document {
+            background: rgba(63, 81, 181, 0.15);
+            border-color: rgba(63, 81, 181, 0.3);
+            color: #3949ab;
+        }
+
+        .message.from-me .attachment-document {
+            background: rgba(121, 134, 203, 0.3);
+            border-color: rgba(121, 134, 203, 0.4);
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .attachment-unknown {
+            background: rgba(158, 158, 158, 0.15);
+            border-color: rgba(158, 158, 158, 0.3);
+            color: #616161;
+        }
+
+        .message.from-me .attachment-unknown {
+            background: rgba(189, 189, 189, 0.3);
+            border-color: rgba(189, 189, 189, 0.4);
+            color: rgba(255, 255, 255, 0.95);
+        }
+        
+        .actions-panel {
+            padding: 1rem;
+        }
+        
+        .action-section {
+            margin-bottom: 2rem;
+        }
+        
+        .action-section h3 {
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            color: #333;
+        }
+        
+        .btn {
+            background: #007aff;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: background-color 0.2s;
+            width: 100%;
+            margin-bottom: 0.5rem;
+        }
+        
+        .btn:hover {
+            background: #0056b3;
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .btn-secondary {
+            background: #8e8e93;
+        }
+        
+        .btn-secondary:hover {
+            background: #636366;
+        }
+        
+        .analysis-results {
+            background: #f9f9f9;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+            font-size: 0.85rem;
+        }
+        
+        .analysis-item {
+            margin-bottom: 0.75rem;
+        }
+        
+        .analysis-label {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .starter-form {
+            display: block;
+        }
+        
+        .mode-toggle {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .mode-option {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 400;
+            cursor: pointer;
+        }
+        
+        .mode-option input[type="radio"] {
+            margin: 0;
+        }
+        
+        .starter-results {
+            margin-top: 1rem;
+        }
+        
+        .starter-item {
+            background: #f9f9f9;
+            border: 1px solid #e5e5e7;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+            position: relative;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .starter-item:hover {
+            background: #f0f0f0;
+        }
+        
+        .starter-text {
+            font-size: 0.95rem;
+            margin-bottom: 0.5rem;
+            line-height: 1.4;
+        }
+        
+        .starter-actions {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: flex-end;
+        }
+        
+        .copy-btn {
+            background: #007aff;
+            color: white;
+            border: none;
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .copy-btn:hover {
+            background: #0056b3;
+        }
+        
+        .copy-btn.copied {
+            background: #28a745;
+        }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #d1d1d6;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+        
+        .simulation-results {
+            margin-top: 1rem;
+        }
+        
+        .conversation-scenario {
+            background: #f9f9f9;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .scenario-title {
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+            color: #007aff;
+        }
+        
+        .scenario-exchange {
+            margin-bottom: 0.5rem;
+            font-size: 0.85rem;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #8e8e93;
+        }
+        
+        .error {
+            background: #ff3b30;
+            color: white;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+        }
+        
+        @media (max-width: 1024px) {
+            .container {
+                grid-template-columns: 1fr;
+                grid-template-rows: 200px 1fr 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>🍎 iMessage CRM Dashboard</h1>
+    </header>
+    
+    <div class="container">
+        <!-- Column 1: Conversation List -->
+        <div class="column">
+            <div class="column-header">
+                Conversations
+            </div>
+            <div id="conversationList" class="conversation-list">
+                <div class="loading">Loading conversations...</div>
+            </div>
+        </div>
+        
+        <!-- Column 2: Message History -->
+        <div class="column">
+            <div class="column-header">
+                Messages
+                <div class="message-controls">
+                    <label for="messageLimit">Show:</label>
+                    <select id="messageLimit" class="limit-selector">
+                        <option value="100">100 messages</option>
+                        <option value="500" selected>500 messages</option>
+                        <option value="1000">1000 messages</option>
+                        <option value="2000">2000 messages</option>
+                        <option value="5000">All recent (5000)</option>
+                    </select>
+                </div>
+            </div>
+            <div id="messagesContainer" class="messages-container">
+                <div class="loading">Select a conversation to view messages</div>
+            </div>
+        </div>
+        
+        <!-- Column 3: AI Insights & Actions -->
+        <div class="column">
+            <div class="column-header">
+                AI Insights & Actions
+            </div>
+            <div id="actionsPanel" class="actions-panel">
+                <div class="action-section">
+                    <h3>Conversation Analysis</h3>
+                    <button id="analyzeBtn" class="btn" disabled>
+                        Select a conversation to analyze
+                    </button>
+                    <div id="analysisResults" class="analysis-results" style="display:none;"></div>
+                </div>
+                
+                <div class="action-section">
+                    <h3>Smart Message Starters</h3>
+                    <div id="starterForm" class="starter-form">
+                        <div class="form-group">
+                            <div class="mode-toggle">
+                                <label class="mode-option">
+                                    <input type="radio" name="starterMode" value="contextual" checked>
+                                    From chat history
+                                </label>
+                                <label class="mode-option">
+                                    <input type="radio" name="starterMode" value="goal">
+                                    Goal-driven
+                                </label>
+                            </div>
+                        </div>
+                        <div id="goalInput" class="form-group" style="display: none;">
+                            <label for="goalText">What do you want to accomplish?</label>
+                            <input type="text" id="goalText" class="form-control" placeholder="e.g., plan a date night, discuss budget, check in about work">
+                        </div>
+                        <button id="generateStarters" class="btn">Generate Starters</button>
+                        <button id="clearStarterHistory" class="btn btn-secondary" style="margin-top: 0.5rem;">Clear History</button>
+                    </div>
+                    <div id="starterResults" class="starter-results"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/script.js"></script>
+</body>
+</html>

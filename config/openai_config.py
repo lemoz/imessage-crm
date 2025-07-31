@@ -41,3 +41,8 @@ class OpenAIConfig:
             timeout=OpenAIConfig.TIMEOUT,
             max_retries=OpenAIConfig.MAX_RETRIES
         )
+
+
+def get_openai_client() -> OpenAI:
+    """Get the default OpenAI client instance."""
+    return OpenAIConfig.get_client()

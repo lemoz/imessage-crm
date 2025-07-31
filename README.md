@@ -1,18 +1,23 @@
-# iMessage CRM MVP
+# iMessage CRM - Smart Message Assistant
 
 ## Overview
 
-The iMessage CRM MVP is a proof-of-concept project aimed at connecting to macOS iMessage, ingesting all conversation data from the Messages app, and organizing it by contact. The goal is to build a lightweight CRM that not only stores conversation histories but also lays the foundation for future enhancements like AI-powered insights, automated response generation, and intelligent follow-ups.
+The iMessage CRM is an intelligent message management system for macOS that enhances your iMessage experience with AI-powered features. It connects to your Messages app, analyzes conversations, and provides smart message starters, relationship insights, and contact management capabilities through an intuitive web dashboard.
 
-### Initial Phase Focus
-- **iMessage Integration**: Connecting to the Messages app using AppleScript and reading data directly from the iMessage SQLite database (chat.db)
-- **Conversation Ingestion**: Extracting and organizing conversation history by contact
-- **Basic CRM Functionality**: Providing a structure to log, search, and manage conversations for each contact
-- **Security and Permissions**: Ensuring proper macOS permissions (Full Disk Access, Automation)
+### Key Features
+- **🤖 Smart Message Starters**: AI-powered contextual message suggestions based on conversation history
+- **📊 Conversation Analysis**: Deep insights into relationships, topics, sentiment, and communication patterns
+- **🎯 Goal-Driven Messaging**: Generate responses tailored to specific intents (respond to messages, check-in, plan events)
+- **📎 Rich Attachment Context**: Intelligent handling of images, videos, documents with detailed metadata
+- **💬 Contact Name Resolution**: Automatic name lookup from macOS Contacts for better conversation organization
+- **🔄 Dynamic Context Loading**: User-configurable message limits (500-2000+) for richer AI context
+- **🚀 Real-time Web Dashboard**: Modern interface for managing conversations and generating smart responses
 
-### Future Phases
-- **Automated Follow-Ups**: Rules to schedule and send follow-up messages
-- **AI-Powered Insights**: Analyzing conversation context, generating reply suggestions, and categorizing topics
+### Technical Highlights
+- **LLM Integration**: Leverages OpenAI GPT models for intelligent conversation analysis
+- **Performance Optimized**: Singleton pattern and caching for fast contact resolution
+- **Privacy Focused**: All data stays local, API keys managed via environment variables
+- **Full macOS Integration**: Direct access to Messages database and Contacts
 
 ## Architecture and Approach
 
@@ -107,6 +112,22 @@ python src/main.py --stats
 
 ## Usage
 
+### Web Dashboard
+
+1. **Start the Web Server:**
+```bash
+python src/web/main.py
+```
+
+2. **Access the Dashboard:**
+Open your browser to `http://localhost:8000`
+
+3. **Dashboard Features:**
+- **Conversation List**: View all contacts with message counts and analysis readiness
+- **Message Viewer**: Browse conversation history with rich attachment display
+- **Conversation Analysis**: Get AI-powered insights about relationships and topics
+- **Smart Message Starters**: Generate contextual conversation starters with goals
+
 ### Command Line Interface
 
 1. **View Database Statistics:**
@@ -130,6 +151,7 @@ python src/main.py --send "+1234567890" "Hello from iMessage CRM!"
 from src.database.db_connector import DatabaseConnector
 from src.messaging.message_sender import MessageSender
 from src.contacts.contact_manager import ContactManager
+from src.ai.conversation_analyzer import ConversationAnalyzer
 
 # Connect to iMessage database
 db = DatabaseConnector()
@@ -142,9 +164,21 @@ sender = MessageSender()
 sender.send_message("+1234567890", "Hello!")
 
 # Manage contacts
-cm = ContactManager(db)
+cm = ContactManager()
 contacts = cm.get_all_contacts()
+
+# Analyze conversation
+analyzer = ConversationAnalyzer()
+messages = db.get_contact_messages(handle_id=123, limit=500)
+analysis = analyzer.analyze_conversation(messages)
 ```
+
+### REST API Endpoints
+
+- `GET /api/v1/conversations` - List all conversations
+- `GET /api/v1/conversations/{chat_id}/messages` - Get messages for a conversation
+- `POST /api/v1/conversations/{chat_id}/analyze` - Analyze a conversation
+- `POST /api/v1/conversations/{chat_id}/starters` - Generate smart message starters
 
 ### Running Tests
 

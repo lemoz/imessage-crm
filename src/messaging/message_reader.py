@@ -613,3 +613,444 @@ class MessageReader:
         except DatabaseAccessError as e:
             logger.error(f"Failed to find chat: {e}")
             raise MessageReadError(f"Failed to find chat: {e}")
+    
+    def get_direct_conversation(self, contact_id: str, limit: int = 1000) -> Dict[str, Any]:
+        """
+        Get all messages from a direct 1-on-1 conversation with a contact.
+        
+        Args:
+            contact_id: Phone number or email of the contact
+            limit: Maximum number of messages to retrieve
+            
+        Returns:
+            Dictionary containing:
+                - chat_info: Information about the chat
+                - messages: List of all messages in chronological order
+                - message_count: Total number of messages
+        """
+        try:
+            logger.info(f"Getting direct conversation with {contact_id}")
+            
+            # First, find the direct chat with this contact
+            # Use both style 45 (direct) and check for non-group chats
+            query = """
+                WITH direct_chats AS (
+                    SELECT 
+                        c.ROWID as chat_id,
+                        c.guid,
+                        c.display_name,
+                        COUNT(DISTINCT chj.handle_id) as participant_count
+                    FROM chat c
+                    JOIN chat_handle_join chj ON c.ROWID = chj.chat_id
+                    JOIN handle h ON chj.handle_id = h.ROWID
+                    WHERE (c.style = 45 OR c.style != 43)  -- Direct messages or not group
+                    AND EXISTS (
+                        SELECT 1 FROM chat_handle_join chj2
+                        JOIN handle h2 ON chj2.handle_id = h2.ROWID
+                        WHERE chj2.chat_id = c.ROWID
+                        AND h2.id = ?
+                    )
+                    GROUP BY c.ROWID, c.guid, c.display_name
+                    HAVING COUNT(DISTINCT chj.handle_id) <= 1  -- Only 1 other participant
+                )
+                SELECT 
+                    dc.chat_id,
+                    dc.guid,
+                    dc.display_name,
+                    (SELECT COUNT(*) FROM chat_message_join cmj WHERE cmj.chat_id = dc.chat_id) as message_count
+                FROM direct_chats dc
+                ORDER BY message_count DESC, dc.chat_id DESC
+                LIMIT 1
+            """
+            
+            results = self._execute_query(query, (contact_id,))
+            
+            if not results:
+                logger.warning(f"No direct chat found with {contact_id}")
+                return {
+                    'chat_info': None,
+                    'messages': [],
+                    'message_count': 0
+                }
+            
+            chat_id = results[0][0]
+            chat_guid = results[0][1]
+            
+            # Now get all messages from this chat
+            messages_query = """
+                SELECT 
+                    m.text,
+                    m.attributedBody,
+                    CASE 
+                        WHEN m.is_from_me = 1 THEN 'Me'
+                        ELSE COALESCE(h.id, ?)
+                    END as sender,
+                    datetime(m.date/1000000000 + strftime('%s', '2001-01-01'), 
+                            'unixepoch', 'localtime') as date,
+                    m.is_from_me,
+                    m.service,
+                    m.date as raw_date,
+                    m.is_read,
+                    m.cache_has_attachments as has_attachment,
+                    a.filename as attachment_name,
+                    a.mime_type as attachment_type,
+                    m.associated_message_type
+                FROM message m
+                JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+                LEFT JOIN handle h ON m.handle_id = h.ROWID
+                LEFT JOIN message_attachment_join maj ON m.ROWID = maj.message_id
+                LEFT JOIN attachment a ON maj.attachment_id = a.ROWID
+                WHERE cmj.chat_id = ?
+                ORDER BY m.date DESC
+                LIMIT ?
+            """
+            
+            messages = self._execute_query(messages_query, (contact_id, chat_id, limit))
+            
+            # Convert to list of dictionaries
+            message_list = []
+            for msg in messages:
+                # Extract text from either text field or attributedBody
+                text = msg[0]
+                if not text and msg[1]:  # attributedBody
+                    text = self._extract_text_from_attributed_body(msg[1])
+                
+                message_dict = {
+                    'text': text,
+                    'sender': msg[2],
+                    'date': msg[3],
+                    'is_from_me': bool(msg[4]),
+                    'service': msg[5],
+                    'raw_date': msg[6],
+                    'is_read': bool(msg[7]),
+                    'has_attachment': bool(msg[8]),
+                    'attachment_name': msg[9],
+                    'attachment_type': msg[10],
+                    'message_type': msg[11]
+                }
+                message_list.append(message_dict)
+            
+            logger.info(f"Retrieved {len(message_list)} messages from direct chat with {contact_id}")
+            
+            return {
+                'chat_info': {
+                    'chat_id': chat_id,
+                    'guid': chat_guid,
+                    'contact_id': contact_id,
+                    'is_group': False
+                },
+                'messages': message_list,
+                'message_count': len(message_list)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting direct conversation: {e}")
+            raise MessageReadError(f"Failed to get direct conversation: {e}")
+    
+    def get_group_chat_messages(self, chat_id: int, limit: int = 1000) -> Dict[str, Any]:
+        """
+        Get all messages from a specific group chat with all participants.
+        
+        Args:
+            chat_id: The chat ID of the group chat
+            limit: Maximum number of messages to retrieve
+            
+        Returns:
+            Dictionary containing:
+                - chat_info: Information about the group chat
+                - participants: List of participants
+                - messages: List of all messages with participant info
+                - message_count: Total number of messages
+        """
+        try:
+            logger.info(f"Getting messages from group chat {chat_id}")
+            
+            # First get chat info and participants
+            chat_info_query = """
+                SELECT 
+                    c.ROWID,
+                    c.guid,
+                    c.display_name,
+                    c.room_name,
+                    GROUP_CONCAT(h.id, ',') as participants
+                FROM chat c
+                LEFT JOIN chat_handle_join chj ON c.ROWID = chj.chat_id
+                LEFT JOIN handle h ON chj.handle_id = h.ROWID
+                WHERE c.ROWID = ?
+                AND c.style = 43  -- Group chat
+                GROUP BY c.ROWID
+            """
+            
+            chat_results = self._execute_query(chat_info_query, (chat_id,))
+            
+            if not chat_results:
+                logger.warning(f"No group chat found with ID {chat_id}")
+                return {
+                    'chat_info': None,
+                    'participants': [],
+                    'messages': [],
+                    'message_count': 0
+                }
+            
+            chat_row = chat_results[0]
+            participants = chat_row[4].split(',') if chat_row[4] else []
+            
+            # Get all messages from this group chat
+            messages_query = """
+                SELECT 
+                    m.text,
+                    m.attributedBody,
+                    CASE 
+                        WHEN m.is_from_me = 1 THEN 'Me'
+                        ELSE COALESCE(h.id, 'Unknown')
+                    END as sender,
+                    datetime(m.date/1000000000 + strftime('%s', '2001-01-01'), 
+                            'unixepoch', 'localtime') as date,
+                    m.is_from_me,
+                    m.service,
+                    m.date as raw_date,
+                    m.is_read,
+                    m.cache_has_attachments as has_attachment,
+                    a.filename as attachment_name,
+                    a.mime_type as attachment_type,
+                    h.id as sender_id
+                FROM message m
+                JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+                LEFT JOIN handle h ON m.handle_id = h.ROWID
+                LEFT JOIN message_attachment_join maj ON m.ROWID = maj.message_id
+                LEFT JOIN attachment a ON maj.attachment_id = a.ROWID
+                WHERE cmj.chat_id = ?
+                ORDER BY m.date ASC
+                LIMIT ?
+            """
+            
+            messages = self._execute_query(messages_query, (chat_id, limit))
+            
+            # Convert to list of dictionaries
+            message_list = []
+            for msg in messages:
+                # Extract text from either text field or attributedBody
+                text = msg[0]
+                if not text and msg[1]:  # attributedBody
+                    text = self._extract_text_from_attributed_body(msg[1])
+                
+                message_dict = {
+                    'text': text,
+                    'sender': msg[2],
+                    'sender_id': msg[11],
+                    'date': msg[3],
+                    'is_from_me': bool(msg[4]),
+                    'service': msg[5],
+                    'raw_date': msg[6],
+                    'is_read': bool(msg[7]),
+                    'has_attachment': bool(msg[8]),
+                    'attachment_name': msg[9],
+                    'attachment_type': msg[10]
+                }
+                message_list.append(message_dict)
+            
+            logger.info(f"Retrieved {len(message_list)} messages from group chat")
+            
+            return {
+                'chat_info': {
+                    'chat_id': chat_row[0],
+                    'guid': chat_row[1],
+                    'display_name': chat_row[2] or chat_row[3] or 'Group Chat',
+                    'is_group': True
+                },
+                'participants': participants,
+                'messages': message_list,
+                'message_count': len(message_list)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting group chat messages: {e}")
+            raise MessageReadError(f"Failed to get group chat messages: {e}")
+    
+    def _extract_text_from_attributed_body(self, data: bytes) -> Optional[str]:
+        """Extract readable text from attributedBody binary data."""
+        if not data:
+            return None
+        
+        try:
+            import plistlib
+            
+            # Try to parse as NSKeyedArchiver plist
+            plist = plistlib.loads(data)
+            if isinstance(plist, dict) and '$objects' in plist:
+                objects = plist['$objects']
+                
+                # Look for NSAttributedString or NSMutableAttributedString
+                for i, obj in enumerate(objects):
+                    if isinstance(obj, dict):
+                        # Check if this is a string object
+                        if '$class' in obj and 'NS.string' in obj:
+                            string_ref = obj['NS.string']
+                            if isinstance(string_ref, dict) and 'CF$UID' in string_ref:
+                                string_index = string_ref['CF$UID']
+                                if string_index < len(objects):
+                                    text = objects[string_index]
+                                    if isinstance(text, str) and len(text.strip()) > 0:
+                                        return text.strip()
+                        
+                        # Check for direct string content in NSString objects
+                        if 'NS.string' in obj:
+                            content = obj['NS.string']
+                            if isinstance(content, str) and len(content.strip()) > 0:
+                                return content.strip()
+                
+                # Look for any string that looks like message content
+                potential_messages = []
+                for obj in objects:
+                    if isinstance(obj, str) and len(obj.strip()) > 2:
+                        # Filter out system/framework strings
+                        if (not obj.startswith('NS') and 
+                            not obj.startswith('__') and
+                            not obj.startswith('CF') and
+                            not obj in ['X$versionY$archiverT$topX$objects', 'streamtyped'] and
+                            '$' not in obj and
+                            'AttributeName' not in obj and
+                            'NSColor' not in obj and
+                            'NSFont' not in obj):
+                            potential_messages.append(obj.strip())
+                
+                # Return the longest potential message
+                if potential_messages:
+                    return max(potential_messages, key=len)
+                    
+        except Exception as e:
+            logger.debug(f"Plist parsing failed: {e}")
+        
+        # Enhanced fallback: extract readable text from binary data
+        try:
+            # First try UTF-8 decoding
+            text = data.decode('utf-8', errors='replace')
+            
+            # Look for patterns that indicate message content
+            import re
+            
+            # Extract sequences of printable characters
+            readable_sequences = re.findall(r'[^\x00-\x1f\x7f-\x9f]{3,}', text)
+            
+            message_candidates = []
+            for seq in readable_sequences:
+                # Clean up the sequence
+                cleaned = seq.strip()
+                
+                # Skip system/framework strings
+                if (len(cleaned) > 2 and
+                    not cleaned.startswith('NS') and
+                    not cleaned.startswith('__') and
+                    not cleaned.startswith('CF') and
+                    not cleaned.startswith('$') and
+                    'streamtyped' not in cleaned.lower() and
+                    'archiver' not in cleaned.lower() and
+                    'attributed' not in cleaned.lower() and
+                    'X$version' not in cleaned and
+                    '$objects' not in cleaned and
+                    '$class' not in cleaned):
+                    
+                    # Look for natural language patterns
+                    if (any(c.isalpha() for c in cleaned) and
+                        len([c for c in cleaned if c.isalnum() or c.isspace()]) / len(cleaned) > 0.7):
+                        message_candidates.append(cleaned)
+            
+            # Return the most likely message content
+            if message_candidates:
+                # Prefer longer, more natural-looking text
+                return max(message_candidates, key=lambda x: len(x) + (10 if ' ' in x else 0))
+                
+        except Exception as e:
+            logger.debug(f"Fallback text extraction failed: {e}")
+        
+        # Last resort: try to find printable ASCII sequences
+        try:
+            ascii_text = ''.join(chr(b) if 32 <= b < 127 else ' ' for b in data)
+            words = [word.strip() for word in ascii_text.split() if len(word.strip()) > 2]
+            
+            # Filter system strings and join meaningful words
+            message_words = [word for word in words if not word.startswith(('NS', '__', 'CF', '$'))]
+            
+            if message_words:
+                # If we have multiple words, join them; otherwise return the longest
+                if len(message_words) > 1:
+                    return ' '.join(message_words)
+                else:
+                    return message_words[0]
+                    
+        except Exception as e:
+            logger.debug(f"ASCII extraction failed: {e}")
+        
+        return None
+    
+    def list_all_chats(self, contact_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        List all chats, optionally filtered by a specific contact.
+        
+        Args:
+            contact_id: Optional phone number or email to filter chats
+            
+        Returns:
+            List of chat dictionaries with info about each chat
+        """
+        try:
+            query = """
+                SELECT 
+                    c.ROWID as chat_id,
+                    c.guid,
+                    c.display_name,
+                    c.room_name,
+                    CASE 
+                        WHEN c.style = 43 THEN 1
+                        ELSE 0
+                    END as is_group,
+                    COUNT(DISTINCT chj.handle_id) as participant_count,
+                    GROUP_CONCAT(h.id, ',') as participants,
+                    MAX(m.date) as last_message_date,
+                    COUNT(m.ROWID) as message_count
+                FROM chat c
+                LEFT JOIN chat_handle_join chj ON c.ROWID = chj.chat_id
+                LEFT JOIN handle h ON chj.handle_id = h.ROWID
+                LEFT JOIN chat_message_join cmj ON c.ROWID = cmj.chat_id
+                LEFT JOIN message m ON cmj.message_id = m.ROWID
+            """
+            
+            params = []
+            if contact_id:
+                query += """
+                    WHERE EXISTS (
+                        SELECT 1 FROM chat_handle_join chj2
+                        JOIN handle h2 ON chj2.handle_id = h2.ROWID
+                        WHERE chj2.chat_id = c.ROWID
+                        AND h2.id = ?
+                    )
+                """
+                params.append(contact_id)
+            
+            query += """
+                GROUP BY c.ROWID
+                ORDER BY last_message_date DESC
+            """
+            
+            results = self._execute_query(query, tuple(params))
+            
+            chats = []
+            for row in results:
+                chat = {
+                    'chat_id': row[0],
+                    'guid': row[1],
+                    'display_name': row[2] or row[3] or 'Unnamed Chat',
+                    'is_group': bool(row[4]),
+                    'participant_count': row[5],
+                    'participants': row[6].split(',') if row[6] else [],
+                    'last_message_date': datetime.fromtimestamp(row[7] / 1e9 + 978307200) if row[7] else None,
+                    'message_count': row[8]
+                }
+                chats.append(chat)
+            
+            logger.info(f"Found {len(chats)} chats")
+            return chats
+            
+        except Exception as e:
+            logger.error(f"Error listing chats: {e}")
+            raise MessageReadError(f"Failed to list chats: {e}")
